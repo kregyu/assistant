@@ -69,13 +69,19 @@ export class KPCAIAssistant {
                 console.log(`🔧 检测到需要工具: ${toolAction.name}`);
                 
                 // 执行工具调用
+                console.log('🔄 正在查询KPC组件信息...');
                 const toolResult = await this.executeTool(toolAction);
+                console.log('✅ 组件信息查询完成');
                 
                 // 如果Ollama可用，让AI生成自然语言回答
+                console.log('🤖 检查AI服务状态...');
                 if (await this.checkOllamaService()) {
-                    return await this.generateFinalAnswer(userMessage, toolResult);
+                    console.log('💡 AI服务可用，正在生成智能回答...');
+                    const finalAnswer = await this.generateFinalAnswer(userMessage, toolResult);
+                    console.log('✅ AI回答生成完成');
+                    return finalAnswer;
                 } else {
-                    // 直接返回工具结果
+                    console.log('⚠️ AI服务不可用，返回原始查询结果');
                     return toolResult;
                 }
             } else {
@@ -96,7 +102,7 @@ export class KPCAIAssistant {
         
         // 从MCP服务器获取组件列表的占位符
         // 注意：这里简化处理，实际可以缓存组件列表
-        const commonComponents = ['button', 'form', 'table', 'input', 'select', 'dialog', 'message', 'tooltip'];
+        const commonComponents = ['button', 'form', 'table', 'tableColumn', 'input', 'select', 'option', 'dialog', 'message', 'tooltip', 'datepicker', 'upload', 'affix', 'badge', 'breadcrumb', 'breadcrumbItem', 'card', 'carousel', 'cascader', 'carouselItem', 'icon', 'buttonGroup','tags', 'pagination', 'switch', 'radio', 'tab', 'timepicker', 'copy', 'collapse', 'checkbox', 'divider', 'drawer', 'dropdown', 'editable', 'ellipsis', 'popover', 'progress', 'rate', 'slider', 'spinner', 'steps', 'timeline', 'tip', 'transfer', 'tree', 'treeSelect', 'virtualList'];
         const mentionedComponent = commonComponents.find(name => msg.includes(name));
         
         // 1. 明确询问组件属性/API
@@ -260,7 +266,7 @@ export class KPCAIAssistant {
      */
     private async directAnswer(userMessage: string): Promise<string> {
         if (await this.checkOllamaService()) {
-            const prompt = `你是一个专业的前端开发助手，特别擅长Vue组件开发。
+            const prompt = `你是一个专业的前端开发助手，特别擅长Kpc组件开发,你的回答要结合Kpc组件库的文档和示例代码。
 
 用户问题：${userMessage}
 

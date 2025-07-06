@@ -130,7 +130,7 @@ export class KPCMCPClient {
                 arguments: { component },
             });
 
-            return result.content[0]?.text || '未获取到结果';
+            return (result.content as any)?.[0]?.text || '未获取到结果';
         } catch (error) {
             console.error('获取组件信息失败:', error);
             throw error;
@@ -149,7 +149,7 @@ export class KPCMCPClient {
                 arguments: { query, category, fuzzy },
             });
 
-            return result.content[0]?.text || '未找到匹配的组件';
+            return (result.content as any)?.[0]?.text || '未找到匹配的组件';
         } catch (error) {
             console.error('搜索组件失败:', error);
             throw error;
@@ -168,7 +168,7 @@ export class KPCMCPClient {
                 arguments: { category, summary },
             });
 
-            return result.content[0]?.text || '未获取到组件列表';
+            return (result.content as any)?.[0]?.text || '未获取到组件列表';
         } catch (error) {
             console.error('获取组件列表失败:', error);
             throw error;
@@ -187,7 +187,7 @@ export class KPCMCPClient {
                 arguments: { component, props, context },
             });
 
-            return result.content[0]?.text || '验证失败';
+            return (result.content as any)?.[0]?.text || '验证失败';
         } catch (error) {
             console.error('验证组件使用失败:', error);
             throw error;
@@ -206,7 +206,7 @@ export class KPCMCPClient {
                 arguments: { component, scenario, framework },
             });
 
-            return result.content[0]?.text || '未获取到示例';
+            return (result.content as any)?.[0]?.text || '未获取到示例';
         } catch (error) {
             console.error('获取使用示例失败:', error);
             throw error;
@@ -225,7 +225,7 @@ export class KPCMCPClient {
                 arguments: {},
             });
 
-            return result.content[0]?.text || '未获取到统计信息';
+            return (result.content as any)?.[0]?.text || '未获取到统计信息';
         } catch (error) {
             console.error('获取统计信息失败:', error);
             throw error;
