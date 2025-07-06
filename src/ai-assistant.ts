@@ -21,15 +21,24 @@ export interface FunctionCall {
     arguments: Record<string, any>;
 }
 
+export interface ToolDescription {
+    name: string;
+    description: string;
+    parameters: Record<string, string>;
+    examples?: string[];
+}
+
 export class KPCAIAssistant {
     private mcpClient: KPCMCPClient;
     private ollamaHost: string;
     private model: string;
+    private toolDescriptions: ToolDescription[];
 
     constructor(ollamaHost = 'http://localhost:11434', model = 'qwen3:8b', mcpServerCommand = 'kpc-mcp-server') {
         this.ollamaHost = ollamaHost;
         this.model = model;
         this.mcpClient = new KPCMCPClient(mcpServerCommand);
+        this.toolDescriptions = this.initializeToolDescriptions();
     }
 
     /**
@@ -51,6 +60,78 @@ export class KPCAIAssistant {
     }
 
     /**
+     * 初始化工具描述配置
+     */
+    private initializeToolDescriptions(): ToolDescription[] {
+        return [
+            {
+                name: 'get_kpc_component',
+                description: '获取KPC组件的详细信息、属性列表、API文档和使用说明',
+                parameters: {
+                    component: 'string - 组件名称，如Button、Table等'
+                },
+                examples: [
+                    '用户询问Button组件的属性',
+                    '想了解Table组件的API',
+                    '需要查看具体组件的文档'
+                ]
+            },
+            {
+                name: 'search_kpc_components',
+                description: '根据关键词搜索相关的KPC组件，支持模糊搜索和分类搜索',
+                parameters: {
+                    query: 'string - 搜索关键词',
+                    category: 'string - 可选，组件分类',
+                    fuzzy: 'boolean - 可选，是否模糊搜索'
+                },
+                examples: [
+                    '用户想找表单相关的组件',
+                    '搜索按钮类型的组件',
+                    '查找数据展示相关组件'
+                ]
+            },
+            {
+                name: 'get_kpc_usage_examples',
+                description: '获取KPC组件的使用示例和代码演示，包含不同场景的用法',
+                parameters: {
+                    component: 'string - 组件名称',
+                    scenario: 'string - 可选，使用场景如基础用法、表单验证等',
+                    framework: 'string - 可选，框架类型'
+                },
+                examples: [
+                    '用户想看Button组件的使用示例',
+                    '需要Table组件的分页示例',
+                    '想了解Form组件的验证用法'
+                ]
+            },
+            {
+                name: 'validate_kpc_usage',
+                description: '验证KPC组件的配置是否正确，检查属性值和用法',
+                parameters: {
+                    component: 'string - 组件名称',
+                    props: 'object - 组件属性配置',
+                    context: 'string - 可选，使用上下文'
+                },
+                examples: [
+                    '用户提供了组件配置想验证是否正确',
+                    '检查属性设置是否有问题',
+                    '确认组件用法是否规范'
+                ]
+            },
+            {
+                name: 'get_kpc_stats',
+                description: '获取KPC组件库的统计信息，如组件数量、分类等',
+                parameters: {},
+                examples: [
+                    '用户询问组件库有多少个组件',
+                    '想了解组件分类统计',
+                    '查看组件库的整体信息'
+                ]
+            }
+        ];
+    }
+
+    /**
      * 清理资源
      */
     async cleanup(): Promise<void> {
@@ -63,7 +144,7 @@ export class KPCAIAssistant {
     async chat(userMessage: string): Promise<string> {
         try {
             // 检测是否需要工具调用
-            const toolAction = this.detectToolNeeded(userMessage);
+            const toolAction = await this.detectToolNeeded(userMessage);
             
             if (toolAction) {
                 console.log(`🔧 检测到需要工具: ${toolAction.name}`);
@@ -95,66 +176,134 @@ export class KPCAIAssistant {
     }
 
     /**
-     * 检测是否需要工具调用（基于规则）
+     * 检测是否需要工具调用（基于AI智能决策）
      */
-    private detectToolNeeded(message: string): FunctionCall | null {
+    private async detectToolNeeded(message: string): Promise<FunctionCall | null> {
+        // 检查Ollama服务是否可用
+        if (!await this.checkOllamaService()) {
+            console.log('⚠️ Ollama服务不可用，使用后备规则检测');
+            return this.fallbackToolDetection(message);
+        }
+
+        const toolsInfo = this.toolDescriptions.map(tool => 
+            `${tool.name}: ${tool.description}\n参数: ${Object.entries(tool.parameters).map(([key, desc]) => `${key} (${desc})`).join(', ')}`
+        ).join('\n\n');
+
+        const systemPrompt = `你是一个工具调用判断器。分析用户问题，判断是否需要调用工具。
+
+可用工具：
+${toolsInfo}
+
+用户问题：${message}
+
+工具选择原则：
+1. 询问组件属性、API、参数 → 使用 get_kpc_component
+2. 询问如何使用、示例、用法 → 优先使用 get_kpc_component（包含使用示例）
+3. 搜索组件 → 使用 search_kpc_components
+4. 验证配置 → 使用 validate_kpc_usage
+5. 统计信息 → 使用 get_kpc_stats
+
+严格按照以下格式返回，不要添加任何解释：
+- 需要工具时返回：{"name": "工具名", "arguments": {参数对象}}
+- 不需要工具时返回：null
+
+例如：
+- "Button组件有哪些属性？"→ {"name": "get_kpc_component", "arguments": {"component": "Button"}}
+- "Table组件如何使用？"→ {"name": "get_kpc_component", "arguments": {"component": "Table"}}
+- "你好"→ null
+
+只返回JSON，不要其他内容。`;
+
+        try {
+            console.log('🤖 AI正在分析是否需要工具调用...');
+            const response = await this.callOllama(systemPrompt);
+            return this.parseToolCallResponse(response);
+        } catch (error) {
+            console.error('AI工具检测失败，使用后备规则:', error);
+            return this.fallbackToolDetection(message);
+        }
+    }
+
+    /**
+     * 解析工具调用响应
+     */
+    private parseToolCallResponse(response: string): FunctionCall | null {
+        try {
+            // 清理响应，移除可能的标签和格式
+            let cleanResponse = response.trim();
+            
+            // 移除thinking标签
+            cleanResponse = cleanResponse.replace(/<think>[\s\S]*?<\/think>/g, '');
+            
+            // 移除markdown代码块
+            if (cleanResponse.includes('```json')) {
+                const jsonMatch = cleanResponse.match(/```json\n?([\s\S]*?)```/);
+                if (jsonMatch) {
+                    cleanResponse = jsonMatch[1];
+                }
+            } else if (cleanResponse.includes('```')) {
+                const codeMatch = cleanResponse.match(/```\n?([\s\S]*?)```/);
+                if (codeMatch) {
+                    cleanResponse = codeMatch[1];
+                }
+            }
+            
+            // 尝试提取JSON对象
+            const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                cleanResponse = jsonMatch[0];
+            }
+            
+            // 清理多余的空白字符
+            cleanResponse = cleanResponse.trim();
+            
+            // 检查是否为null
+            if (cleanResponse.toLowerCase() === 'null' || cleanResponse === '') {
+                return null;
+            }
+            
+            // 尝试解析JSON
+            const parsed = JSON.parse(cleanResponse);
+            
+            // 验证解析结果
+            if (parsed && typeof parsed === 'object' && parsed.name) {
+                // 验证工具名称是否有效
+                const validTool = this.toolDescriptions.find(tool => tool.name === parsed.name);
+                if (validTool) {
+                    return parsed as FunctionCall;
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('解析工具调用响应失败:', error);
+            console.error('原始响应:', response);
+            return null;
+        }
+    }
+
+    /**
+     * 后备工具检测（基于规则）
+     */
+    private fallbackToolDetection(message: string): FunctionCall | null {
         const msg = message.toLowerCase();
         
-        // 从MCP服务器获取组件列表的占位符
-        // 注意：这里简化处理，实际可以缓存组件列表
-        const commonComponents = ['button', 'form', 'table', 'tableColumn', 'input', 'select', 'option', 'dialog', 'message', 'tooltip', 'datepicker', 'upload', 'affix', 'badge', 'breadcrumb', 'breadcrumbItem', 'card', 'carousel', 'cascader', 'carouselItem', 'icon', 'buttonGroup','tags', 'pagination', 'switch', 'radio', 'tab', 'timepicker', 'copy', 'collapse', 'checkbox', 'divider', 'drawer', 'dropdown', 'editable', 'ellipsis', 'popover', 'progress', 'rate', 'slider', 'spinner', 'steps', 'timeline', 'tip', 'transfer', 'tree', 'treeSelect', 'virtualList'];
+        // 常见组件列表
+        const commonComponents = ['button', 'form', 'table', 'input', 'select', 'dialog', 'tooltip', 'datepicker', 'upload', 'pagination', 'switch', 'radio', 'tab', 'checkbox', 'dropdown'];
         const mentionedComponent = commonComponents.find(name => msg.includes(name));
         
-        // 1. 明确询问组件属性/API
-        if ((msg.includes('属性') || msg.includes('props') || msg.includes('api') || msg.includes('参数')) && mentionedComponent) {
-            return {
-                name: 'get_kpc_component',
-                arguments: { component: this.capitalizeFirst(mentionedComponent) }
-            };
-        }
-        
-        // 2. 询问使用方法/示例
-        if ((msg.includes('如何使用') || msg.includes('怎么用') || msg.includes('示例') || msg.includes('例子') || msg.includes('用法')) && mentionedComponent) {
-            const scenario = this.extractScenario(message);
-            return {
-                name: 'get_kpc_usage_examples',
-                arguments: { 
-                    component: this.capitalizeFirst(mentionedComponent),
-                    scenario: scenario
-                }
-            };
-        }
-        
-        // 3. 验证配置
-        if ((msg.includes('验证') || msg.includes('检查') || msg.includes('正确') || msg.includes('配置')) && mentionedComponent) {
-            const props = this.extractPropsFromMessage(message);
-            return {
-                name: 'validate_kpc_usage',
-                arguments: {
-                    component: this.capitalizeFirst(mentionedComponent),
-                    props: props
-                }
-            };
-        }
-        
-        // 4. 搜索组件
-        if (msg.includes('搜索') || msg.includes('查找') || msg.includes('找') || msg.includes('相关组件')) {
-            const query = this.extractSearchQuery(message);
-            return {
-                name: 'search_kpc_components',
-                arguments: { query: query }
-            };
-        }
-        
-        // 5. 统计信息
+        // 统计信息
         if (msg.includes('多少个') || msg.includes('总共') || msg.includes('统计') || msg.includes('数量')) {
-            return {
-                name: 'get_kpc_stats',
-                arguments: {}
-            };
+            return { name: 'get_kpc_stats', arguments: {} };
         }
         
-        // 6. 如果提到了组件名但没有明确意图，获取组件信息
+        // 搜索组件
+        if (msg.includes('搜索') || msg.includes('查找') || msg.includes('找') || msg.includes('相关组件')) {
+            const query = message.replace(/搜索|查找|找|相关组件|的组件|组件/g, '').trim();
+            return { name: 'search_kpc_components', arguments: { query } };
+        }
+        
+        // 组件相关问题 - 统一使用 get_kpc_component
         if (mentionedComponent) {
             return {
                 name: 'get_kpc_component',
@@ -172,63 +321,6 @@ export class KPCAIAssistant {
         return str.charAt(0).toUpperCase() + str.slice(1);
     }
 
-    /**
-     * 提取使用场景
-     */
-    private extractScenario(message: string): string | undefined {
-        const scenarios = ['基础用法', '表单验证', '高级配置', '事件处理', '自定义样式', '分页', '排序', '筛选'];
-        
-        for (const scenario of scenarios) {
-            if (message.includes(scenario)) {
-                return scenario;
-            }
-        }
-        
-        if (message.includes('分页')) return '分页';
-        if (message.includes('验证')) return '表单验证';
-        if (message.includes('事件')) return '事件处理';
-        
-        return undefined;
-    }
-
-    /**
-     * 从消息中提取属性配置
-     */
-    private extractPropsFromMessage(message: string): any {
-        try {
-            // 尝试提取JSON对象
-            const jsonMatch = message.match(/\{[^}]+\}/);
-            if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]);
-            }
-        } catch (e) {
-            // 忽略解析错误
-        }
-        
-        // 简单的属性提取
-        const props: any = {};
-        
-        if (message.includes('type')) {
-            const typeMatch = message.match(/type[：:]\s*["']?(\w+)["']?/);
-            if (typeMatch) props.type = typeMatch[1];
-        }
-        
-        if (message.includes('size')) {
-            const sizeMatch = message.match(/size[：:]\s*["']?(\w+)["']?/);
-            if (sizeMatch) props.size = sizeMatch[1];
-        }
-        
-        return props;
-    }
-
-    /**
-     * 提取搜索关键词
-     */
-    private extractSearchQuery(message: string): string {
-        return message
-            .replace(/搜索|查找|找|相关组件|的组件|组件/g, '')
-            .trim();
-    }
 
     /**
      * 执行工具调用
@@ -237,26 +329,42 @@ export class KPCAIAssistant {
         const { name, arguments: args } = toolCall;
 
         try {
+            let result: string;
+            
             switch (name) {
                 case 'get_kpc_component':
-                    return await this.mcpClient.getComponent(args.component);
+                    result = await this.mcpClient.getComponent(args.component);
+                    break;
                 
                 case 'search_kpc_components':
-                    return await this.mcpClient.searchComponents(args.query, args.category, args.fuzzy);
+                    result = await this.mcpClient.searchComponents(args.query, args.category, args.fuzzy);
+                    break;
                 
                 case 'get_kpc_usage_examples':
-                    return await this.mcpClient.getUsageExamples(args.component, args.scenario, args.framework);
+                    result = await this.mcpClient.getUsageExamples(args.component, args.scenario, args.framework);
+                    break;
                 
                 case 'validate_kpc_usage':
-                    return await this.mcpClient.validateUsage(args.component, args.props, args.context);
+                    result = await this.mcpClient.validateUsage(args.component, args.props, args.context);
+                    break;
                 
                 case 'get_kpc_stats':
-                    return await this.mcpClient.getStats();
+                    result = await this.mcpClient.getStats();
+                    break;
                 
                 default:
                     return `未知工具：${name}`;
             }
+            
+            // 检查结果有效性
+            if (!result || result.trim() === '' || result === 'undefined') {
+                console.warn(`工具 ${name} 返回空结果，参数:`, args);
+                return `工具 ${name} 未返回有效结果。请检查参数或稍后重试。`;
+            }
+            
+            return result;
         } catch (error) {
+            console.error(`工具 ${name} 执行失败:`, error);
             return `工具执行失败：${error}`;
         }
     }
@@ -362,7 +470,7 @@ ${toolResult}
     async chatStream(userMessage: string, onChunk: (chunk: string) => void): Promise<void> {
         try {
             // 检测工具需求
-            const toolAction = this.detectToolNeeded(userMessage);
+            const toolAction = await this.detectToolNeeded(userMessage);
             
             if (toolAction) {
                 onChunk(`🔧 正在查询${toolAction.name}...\n\n`);
